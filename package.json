@@ -1,0 +1,14 @@
+{
+  "name": "@ments/utils",
+  "module": "index.ts",
+  "main": "./index.ts",
+  "version": "1.0.2",
+  "type": "module",
+  "private": false,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
