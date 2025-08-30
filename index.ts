@@ -9,7 +9,7 @@ export type MeasureContext = {
 
 export async function measure<T>(
   fn: (measure: typeof measure) => Promise<T>,
-  action: string,
+  action: string | object,
   context: MeasureContext = {}
 ): Promise<T> {
   const start = performance.now();
@@ -18,11 +18,23 @@ export async function measure<T>(
   const fullIdChain = [...(context.idChain || []), currentId].map(id => `[${id}]`).join('');
 
   try {
+    // Handle object vs string action
+    const actionLabel = typeof action === 'object' && action !== null && 'label' in action 
+      ? String(action.label) 
+      : typeof action === 'object' 
+        ? String(action) 
+        : action;
+    
     // Opening: show parent chain + action + new ID
     if (parentIdChain) {
-      console.log(`> ${parentIdChain} ${action} (${currentId})`);
+      console.log(`> ${parentIdChain} ${actionLabel} (${currentId})`);
     } else {
-      console.log(`> ${action} (${currentId})`);
+      console.log(`> ${actionLabel} (${currentId})`);
+    }
+    
+    // If action is an object, also print it as a table
+    if (typeof action === 'object' && action !== null) {
+      console.table(action);
     }
 
     const result = await fn((nestedFn, nestedAction) =>
@@ -42,8 +54,7 @@ export async function measure<T>(
     // console.log('=========================== ERROR ===========================');
     console.log(`< ${fullIdChain} ✗ FAILED ${duration.toFixed(2)}ms`);
     if (error instanceof Error) {
-      console.error(`${fullIdChain}`, error.message);
-      if (error.stack) console.error(error.stack);
+      console.error(`${fullIdChain}`, error.stack ?? error.message);
     } else {
       console.error(`${fullIdChain}`, error);
     }
