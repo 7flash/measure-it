@@ -8,14 +8,14 @@ function toAlpha(num: number): string {
   return result;
 }
 
-export async function measure<T>(
-  fn: (measure: typeof measure) => Promise<T>,
-  action: string | object
+export async function measure<T = null>(
+  arg1: ((measure: typeof measure) => Promise<T>) | string | object,
+  action?: string | object
 ): Promise<T | null> {
   const _measureInternal = async <U>(
     fnInternal: (measure: (fn: any, action: any) => Promise<U | null>) => Promise<U>,
     actionInternal: string | object,
-    parentIdChain: string[]
+    parentIdChain: (string | number)[]
   ): Promise<U | null> => {
     const start = performance.now();
     let childCounter = 0;
@@ -70,5 +70,11 @@ export async function measure<T>(
     }
   };
 
-  return _measureInternal(fn, action, []);
+  if (typeof arg1 === 'function') {
+    return _measureInternal(arg1 as any, action!, []) as Promise<T | null>;
+  } else {
+    const dummyFn = async (_measureForNextLevel: any): Promise<null> => null;
+    return _measureInternal(dummyFn, arg1, []) as Promise<T | null>;
+  }
 }
+
