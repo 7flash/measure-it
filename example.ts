@@ -22,7 +22,8 @@ async function fetchComments(postId: number) {
 async function comprehensiveWorkflow() {
   await measure(async (m) => {
     // 0. Using measure to print statement (no function passed)
-    await measure({ label: 'noop measure', values: [1,2] });
+    await measure('noop measure string');
+    await measure({ label: 'noop measure object', values: [1,2] });
     
     // 1. Fetch a user
     const user1 = await m(

@@ -105,3 +105,12 @@ export async function measure<T = null>(
     return _measureInternal(dummyFn, arg1, []) as Promise<T | null>;
   }
 }
+
+export function noop(arg1?: any, arg2?: string) {
+  if (typeof arg1 === 'function') {
+    // Handle m(fn, label): run fn with inner noop
+    return arg1(noop);
+  }
+  // Handle m(msg): ignore logging
+  return undefined;
+};
