@@ -1,14 +1,32 @@
 {
-  "name": "@ments/utils",
+  "name": "measure-fn",
   "module": "index.ts",
   "main": "./index.ts",
-  "version": "1.6.1",
+  "version": "2.0.0",
   "type": "module",
   "private": false,
+  "description": "Zero-dependency function performance measurement with hierarchical logging",
+  "keywords": [
+    "measure",
+    "performance",
+    "timing",
+    "logging",
+    "tracing",
+    "hierarchical"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/7flash/measure-fn"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
   "peerDependencies": {
     "typescript": "^5"
+  },
+  "scripts": {
+    "test": "bun test",
+    "example": "bun run example.ts"
   }
 }
