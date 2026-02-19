@@ -1,73 +1,101 @@
-import { measure, measureSync, type MeasureFn } from "./index.ts";
+import { measure, measureSync, configure, createMeasure, safeStringify, type MeasureFn } from "./index.ts";
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function fetchUser(userId: number) {
-  await sleep(100);
+  await sleep(50 + Math.random() * 50);
   if (userId === 999) throw new Error('User not found', { cause: { userId } });
   return { id: userId, name: `User ${userId}` };
 }
 
-async function fetchPosts(userId: number) {
-  await sleep(150);
-  return [{ id: 1, title: 'First Post', userId }];
-}
-async function fetchComments(postId: number) {
-  await sleep(80);
-  return [{ id: 1, text: 'Great post!', postId }];
-}
-function syncFetch() {
-  do {
-  } while (Math.random() < 0.99999999);
-  return 42;
+async function flakyApi() {
+  await sleep(30);
+  if (Math.random() < 0.6) throw new Error('Service unavailable');
+  return { status: 'ok' };
 }
 
-async function comprehensiveWorkflow() {
-  // Sync: label first, fn second
-  const syncValue = measureSync('get sync value', syncFetch);
+async function main() {
+  configure({ timestamps: true });
 
-  // Annotation-only call (label only, no fn)
-  if (syncValue !== null) {
-    measureSync(`sync returned ${syncValue}`);
-  }
+  // ─── Sync leaf: single line + auto-printed result ──────────────
+  measureSync('Load config', () => ({ env: 'prod', port: 3000 }));
 
-  // Async: label first, fn second
-  await measure('Comprehensive Workflow Example', async (m) => {
-    const syncValue = await m('get sync value', syncFetch);
-    await m({ label: 'noop measure object', values: [syncValue] });
+  // ─── Annotation ────────────────────────────────────────────────
+  measureSync('App ready');
 
-    const user1 = await m(
-      { label: 'Fetch User', userId: 1 },
-      () => fetchUser(1)
-    );
+  // ─── Sync with children ────────────────────────────────────────
+  measureSync('Build report', (m) => {
+    const raw = m('Parse CSV', () => 'col1,col2\nval1,val2');
+    const rows = m('Split rows', () => raw?.split('\n') ?? []);
+    return { rows, count: rows?.length ?? 0 };
+  });
 
-    // @note measure never throws, only returns null in case of exception
-    await m(
-      { label: 'Fetch Invalid User', userId: 999 },
-      () => fetchUser(999)
-    );
+  // ─── Circular ref (safe stringify) ─────────────────────────────
+  measureSync('Circular ref', () => {
+    const obj: any = { name: 'root' };
+    obj.self = obj;
+    return obj;
+  });
 
-    await m('Fetch Multiple Users in Parallel', async (m2: MeasureFn) => {
-      const userPromises = [2, 3, 4].map(id =>
-        m2({ label: 'Fetch User', userId: id }, () => fetchUser(id))
-      );
-      await Promise.all(userPromises);
+  // ─── Parallel async (interleaved) ──────────────────────────────
+  await measure('Parallel Fetch', async (m) => {
+    await Promise.all([
+      m({ label: 'Fetch User', userId: 1 }, () => fetchUser(1)),
+      m({ label: 'Fetch User', userId: 2 }, () => fetchUser(2)),
+      m({ label: 'Fetch User', userId: 3 }, () => fetchUser(3)),
+    ]);
+  });
+
+  // ─── Budget: warn when operation exceeds time limit ────────────
+  await measure({ label: 'DB query', budget: 30 }, async () => {
+    await sleep(80); // intentionally slow
+    return { rows: 42 };
+  });
+
+  // ─── Retry with backoff ────────────────────────────────────────
+  await measure.retry('Flaky API', { attempts: 3, delay: 100, backoff: 2 }, flakyApi);
+
+  // ─── Assert: throws if null ────────────────────────────────────
+  const user = await measure.assert('Assert user', () => fetchUser(1));
+  console.log(`Asserted: ${user.name}`);
+
+  // ─── Wrap: decorator pattern ───────────────────────────────────
+  const getUser = measure.wrap('Get user', fetchUser);
+  await getUser(1);
+  await getUser(2);
+
+  // ─── Batch: process array with progress ────────────────────────
+  const userIds = Array.from({ length: 20 }, (_, i) => i + 1);
+  await measure.batch('Fetch all users', userIds, async (id) => {
+    return await fetchUser(id);
+  }, { every: 5 });
+
+  // ─── Scoped instances ──────────────────────────────────────────
+  const api = createMeasure('api');
+  const db = createMeasure('db');
+
+  await api.measure('GET /users', async () => {
+    return await db.measure('SELECT users', async () => {
+      await sleep(30);
+      return [{ id: 1 }, { id: 2 }];
     });
+  });
 
-    if (user1 === null) return;
+  // ─── safeStringify utility ─────────────────────────────────────
+  const circular: any = { a: 1 };
+  circular.self = circular;
+  console.log(`safeStringify: ${safeStringify(circular)}`);
 
-    await m('Enrich Posts with Comments', async (m2: MeasureFn) => {
-      const posts = await m2({ label: 'Fetch Posts', userId: user1.id }, () => fetchPosts(user1.id));
+  // ─── Smart duration formatting (simulated long op) ─────────────
+  await measure('Quick op', async () => {
+    await sleep(5);
+    return 'fast';
+  });
 
-      if (posts === null) return;
-      for (const post of posts) {
-        await m2({ label: 'Fetch Comments', postId: post.id }, () => fetchComments(post.id));
-      }
-    });
+  await measure('Slow op', async () => {
+    await sleep(1200);
+    return 'slow';
   });
 }
 
-// To run it:
-comprehensiveWorkflow().then(() => {
-  console.log('\n✅ Workflow complete.');
-});
+main().then(() => console.log('\n✅ Done.'));

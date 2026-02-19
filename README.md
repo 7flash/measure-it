@@ -1,72 +1,33 @@
 # measure-fn
 
-**Stop writing blind code.** Every function you write either succeeds or fails, takes some amount of time, and lives inside a larger flow. `measure-fn` makes all of that visible — automatically, hierarchically, beautifully.
+**Stop writing blind code.** Every function you write either succeeds or fails, takes some amount of time, and lives inside a larger flow. `measure-fn` makes all of that visible — automatically, hierarchically.
 
 ```
-> [a] Build Dashboard
-> [a-a] Fetch users
-< [a-a] ✓ 245.12ms
-> [a-b] Process users
-> [a-b-a] Enrich user (userId=1)
-< [a-b-a] ✓ 12.34ms
-> [a-b-b] Enrich user (userId=2)
-< [a-b-b] ✓ 11.89ms
-< [a-b] ✓ 25.67ms
-> [a-c] Generate report
-< [a-c] ✓ 8.91ms
-< [a] ✓ 281.23ms
+[18:50:04.893] [a] ✓ Load config 0.09ms → {"env":"prod","port":3000}
+[18:50:04.894] [b] = App ready
+[18:50:04.895] [e] ... Parallel Fetch
+[18:50:04.895] [e-a] ... Fetch User (userId=1)
+[18:50:04.895] [e-b] ... Fetch User (userId=2)
+[18:50:04.950] [e-b] ✓ Fetch User 55.58ms → {"id":2,"name":"User 2"}
+[18:50:04.981] [e-a] ✓ Fetch User 85.93ms → {"id":1,"name":"User 1"}
+[18:50:04.981] [e] ✓ Parallel Fetch 86.08ms
+[18:50:05.072] [f] ✓ DB query 91.12ms → {"rows":42} ⚠ OVER BUDGET (30.00ms)
+[18:50:05.775] [m] ... Fetch all users (20 items)
+[18:50:06.179] [m] = 5/20 (0.4s, 12/s)
+[18:50:07.450] [m] ✓ Fetch all users (20 items) 1.7s → "20/20 ok"
+[18:50:07.450] [api:a] ... GET /users
+[18:50:07.450] [db:a] ... SELECT users
+[18:50:07.493] [db:a] ✓ SELECT users 43.07ms → [{"id":1},{"id":2}]
+[18:50:07.493] [api:a] ✓ GET /users 43.32ms → [{"id":1},{"id":2}]
+[18:50:08.721] [o] ✓ Slow op 1.2s → "slow"
 ```
 
-No setup. No dashboards to configure. No telemetry SDKs. Just wrap your functions and your entire program becomes observable.
-
-## Why Structure Your Programs With measure-fn
-
-Most codebases are **opaque by default**. When something is slow, you add `console.time`. When something crashes, you add `try/catch`. When you need tracing, you integrate a monitoring SDK. You bolt observability on *after* the problems arrive.
-
-**measure-fn inverts this.** You structure your program with `measure` from the start, and you get:
-
-- ⏱️ **Every operation timed** — no more "which step is slow?"
-- 🌳 **Hierarchical trace** — see exactly how operations nest and compose
-- 🛡️ **Errors caught and logged automatically** — with stack traces, causes, and unique IDs for every operation
-- 📍 **Unique alphabetic IDs** — `[a-b-c]` tells you exactly which step in which pipeline failed
-- 🔄 **Zero disruption** — errors return `null`, they never crash your program. Handle failures, don't fight them.
-
-The result: your logs tell a **complete story**. You can read them top-to-bottom and understand exactly what happened, what took how long, and what failed — without adding a single breakpoint.
-
-### The Philosophy: Programs as Measured Pipelines
-
-Think of your program not as a flat list of statements, but as a **tree of measured operations**. Every meaningful unit of work — an API call, a database query, a transformation, a batch process — becomes a node in this tree.
-
-```typescript
-// ❌ Typical blind code
-async function processOrder(orderId: string) {
-  const order = await fetchOrder(orderId);
-  const inventory = await checkInventory(order.items);
-  await chargePayment(order);
-  await shipOrder(order);
-}
-
-// ✅ Measured code — observable from day one
-async function processOrder(orderId: string) {
-  await measure({ label: 'Process Order', orderId }, async (m) => {
-    const order = await m('Fetch order', () => fetchOrder(orderId));
-    if (!order) return; // error already logged + traced
-
-    await m('Check inventory', () => checkInventory(order.items));
-    await m('Charge payment', () => chargePayment(order));
-    await m('Ship order', () => shipOrder(order));
-  });
-}
-```
-
-The measured version costs you **one extra line per operation**. In return, you get timing, error isolation, hierarchical tracing, and structured logs — forever.
+No setup. No dashboards. Just wrap your functions.
 
 ## Install
 
 ```sh
 bun add measure-fn
-# or
-npm install measure-fn
 ```
 
 ## Quick Start
@@ -74,211 +35,185 @@ npm install measure-fn
 ```typescript
 import { measure, measureSync } from 'measure-fn';
 
-// Label first, function second — reads like a sentence
-await measure('Fetch data', async () => {
-  const res = await fetch('https://api.example.com/data');
-  return res.json();
-});
+// Sync leaf — single line with auto-printed result
+const config = measureSync('Parse config', () => JSON.parse(str));
+// → [a] ✓ Parse config 0.20ms → {"port":3000}
 
-// Sync operations work the same way
-const config = measureSync('Parse config', () => {
-  return JSON.parse(configString);
+// Async — start + end
+const data = await measure('Fetch data', async () => {
+  return await fetch(url).then(r => r.json());
 });
+// → [b] ... Fetch data
+// → [b] ✓ Fetch data 245.12ms → [{"id":1}]
 ```
+
+## Output Format
+
+| Pattern | When | Example |
+|---------|------|---------|
+| `[id] ... label` | Async start / sync with children | `[a] ... Pipeline` |
+| `[id] ✓ label Nms → value` | Success | `[a] ✓ Fetch 102ms → {"id":1}` |
+| `[id] ✗ label Nms (err)` | Error | `[a] ✗ Fetch 2ms (timeout)` |
+| `[id] = label` | Annotation | `[a] = checkpoint` |
+
+**No indentation, no colors.** IDs encode hierarchy. Return values auto-print. Circular refs → `[Circular]`, long values truncated.
+
+**Smart duration**: `0.10ms` → `1.2s` → `2m 5s`
 
 ## API
 
 ### `measure(label, fn?)` — async
 
 ```typescript
-// Simple: wrap any async operation
-const user = await measure('Fetch user', async () => {
-  return await fetchUser(1);
-});
+// Simple
+const user = await measure('Fetch user', () => fetchUser(1));
 
-// Nested: receive `m` for composing sub-operations into a tree
+// Nested + parallel
 await measure('Pipeline', async (m) => {
-  const user = await m('Get user', () => fetchUser(1));
-  const posts = await m('Get posts', () => fetchPosts(user.id));
-
-  // Arbitrarily deep nesting
-  await m('Enrich posts', async (m2) => {
-    for (const post of posts) {
-      await m2({ label: 'Get comments', postId: post.id }, () =>
-        fetchComments(post.id)
-      );
-    }
-  });
+  await Promise.all([
+    m({ label: 'Fetch', userId: 1 }, () => fetchUser(1)),
+    m({ label: 'Fetch', userId: 2 }, () => fetchUser(2)),
+  ]);
 });
 
-// Annotation — log a marker without timing anything
-await measure('checkpoint reached');
+// Annotation
+await measure('checkpoint');
 ```
 
 ### `measureSync(label, fn?)` — synchronous
 
 ```typescript
-const result = measureSync('Compute hash', () => {
-  return computeExpensiveHash(data);
-});
+// Leaf — single line
+const hash = measureSync('Hash', () => computeHash(data));
 
-// Nested sync operations
-measureSync('Build report', (m) => {
-  const data = m('Parse CSV', () => parseCSV(raw));
-  const summary = m('Summarize', () => summarize(data));
-  return summary;
+// With children — start + end
+measureSync('Report', (m) => {
+  const data = m('Parse', () => parse(raw));
+  return m('Summarize', () => summarize(data));
 });
 ```
 
-### Label formats
+### `measure.wrap(label, fn)` — decorator
 
-Labels can be a string or an object with a `.label` property. Extra properties are logged as metadata — perfect for recording request IDs, user IDs, or any context:
+Wrap a function once, every call is measured:
 
 ```typescript
-await measure('Simple string label', async () => fetchUser(1));
-
-await measure({ label: 'Fetch user', userId: 1, region: 'us-east' }, async () => fetchUser(1));
-// Logs: > [a] Fetch user (userId=1 region="us-east")
+const getUser = measure.wrap('Get user', fetchUser);
+await getUser(1); // → [a] ... Get user → [a] ✓ Get user 82ms → {...}
+await getUser(2); // → [b] ... Get user → [b] ✓ Get user 75ms → {...}
 ```
 
-### `resetCounter()`
-
-Resets the global alphabetic ID counter. Essential for deterministic test output:
+### `measure.batch(label, items, fn, opts?)` — array processing with progress
 
 ```typescript
-import { resetCounter } from 'measure-fn';
-beforeEach(() => resetCounter());
+const results = await measure.batch('Process users', userIds, async (id) => {
+  return await processUser(id);
+}, { every: 100 }); // log progress every 100 items
+```
+Output:
+```
+[a] ... Process users (500 items)
+[a] = 100/500 (1.2s, 83/s)
+[a] = 200/500 (2.1s, 95/s)
+[a] ✓ Process users (500 items) 5.3s → "500/500 ok"
 ```
 
-## Error Handling — Errors Are Data, Not Crashes
-
-This is the most important design decision in `measure-fn`: **errors never propagate**. When a measured function throws:
-
-1. The error is logged with `✗`, the duration, and the error message
-2. The full stack trace and `cause` (if present) go to `console.error` with the operation's unique ID
-3. The function returns `null`
+### `measure.retry(label, opts, fn)` — retry with backoff
 
 ```typescript
-const result = await measure('Risky operation', async () => {
-  throw new Error('Network timeout', { cause: { url: '/api', retries: 3 } });
+const result = await measure.retry('Flaky API', {
+  attempts: 3, delay: 1000, backoff: 2
+}, () => fetchFlakyApi());
+```
+```
+[a] ... Flaky API [1/3]
+[a] ✗ Flaky API [1/3] 102ms (timeout)
+[b] ... Flaky API [2/3]
+[b] ✓ Flaky API [2/3] 89ms → {"status":"ok"}
+```
+
+### `measure.assert(label, fn)` — throw if null
+
+```typescript
+const user = await measure.assert('Get user', () => fetchUser(1));
+// guaranteed non-null, or throws
+```
+
+### Budget — warn on slow operations
+
+```typescript
+await measure({ label: 'DB query', budget: 100 }, async () => {
+  return await db.query('SELECT * FROM users');
 });
-
-// result === null — no crash, no try/catch needed
+// → [a] ✓ DB query 245ms → [...] ⚠ OVER BUDGET (100ms)
 ```
 
-```
-> [a] Risky operation
-< [a] ✗ 2.31ms (Network timeout)
-[a] Error: Network timeout
-    at ... (stack trace)
-[a] Cause: { url: "/api", retries: 3 }
-```
-
-This makes your programs **resilient by default**. A failing sub-operation doesn't take down the parent — it returns `null` and you decide what to do:
+### `createMeasure(prefix)` — scoped instances
 
 ```typescript
-await measure('User Pipeline', async (m) => {
-  const user = await m('Get user', () => fetchUser(999));
-  if (user === null) {
-    // The error was already logged with full context.
-    // Skip dependent operations gracefully.
-    return;
+const api = createMeasure('api');
+const db = createMeasure('db');
+
+await api.measure('GET /users', async () => {
+  return await db.measure('SELECT', () => query('...'));
+});
+// → [api:a] ... GET /users
+// → [db:a] ✓ SELECT 44ms → [...]
+// → [api:a] ✓ GET /users 45ms → [...]
+```
+
+### `configure(opts)` — runtime config
+
+```typescript
+configure({
+  silent: true,            // suppress all output
+  timestamps: true,        // prepend [HH:MM:SS.mmm]
+  maxResultLength: 200,    // truncate results (default: 80)
+  logger: (event) => {     // custom event handler
+    myTelemetry.track(event);
   }
-  await m('Get posts', () => fetchPosts(user.id));
 });
 ```
 
-No try/catch pyramids. No error-swallowing. Every error is captured, attributed to a specific operation ID, and visible in plain text.
+Env: `MEASURE_SILENT=1`, `MEASURE_TIMESTAMPS=1`
 
-## Output Format
-
-| Prefix | Meaning |
-|--------|---------|
-| `>` | Operation started |
-| `<` | Operation completed |
-| `=` | Annotation (label-only, no timing) |
-| `✓` | Success |
-| `✗` | Error |
-
-IDs are alphabetic and hierarchical: `[a]`, `[a-a]`, `[a-b]`, `[a-b-a]`, etc. After `z` it wraps: `aa`, `ab`, `ac`...
-
-Every ID is a **unique address** for that operation in that execution. You can grep for `[a-c-b]` and find exactly one operation — making log analysis trivial.
-
-## Real-World Patterns
-
-### Server Request Handler
+### `measure.timed(label, fn?)` — programmatic timing
 
 ```typescript
-app.get('/api/dashboard', async (req, res) => {
-  const data = await measure({ label: 'GET /api/dashboard', ip: req.ip }, async (m) => {
-    const session = await m('Validate session', () => validateSession(req));
-    if (!session) return null;
-
-    const [users, stats] = await Promise.all([
-      m('Fetch users', () => db.users.all()),
-      m('Compute stats', () => computeStats()),
-    ]);
-
-    return { users, stats };
-  });
-
-  res.json(data ?? { error: 'Failed' });
-});
+const { result, duration } = await measure.timed('Fetch', () => fetchUsers());
 ```
 
-### Background Job
+### Utilities
 
 ```typescript
-async function processBatch(batchId: string) {
-  await measure({ label: 'Process Batch', batchId }, async (m) => {
-    const items = await m('Load items', () => loadBatch(batchId));
-    if (!items) return;
+import { safeStringify, formatDuration, resetCounter } from 'measure-fn';
 
-    await m('Transform', async (m2) => {
-      for (const item of items) {
-        await m2({ label: 'Process item', itemId: item.id }, () => 
-          transform(item)
-        );
-      }
-    });
-
-    await m('Save results', () => saveBatch(batchId, items));
-  });
-}
+safeStringify({ circular: self }); // handles circular refs, truncates
+formatDuration(91234);              // "1m 31s"
+resetCounter();                     // reset ID counter for tests
 ```
 
-### CLI Tool
+## Error Handling
 
-```typescript
-measureSync('Build Project', (m) => {
-  const config = m('Load config', () => loadConfig('./project.toml'));
-  if (!config) process.exit(1);
-
-  m('Compile', () => compile(config));
-  m('Bundle', () => bundle(config));
-  m('Write output', () => writeOutput(config.outDir));
-});
-```
+**measure never throws** (except `.assert()`). On error: logs `✗`, returns `null`, prints stack to stderr.
 
 ## Types
 
 ```typescript
-export type MeasureFn = {
-  <U>(label: string | object, fn: () => Promise<U>): Promise<U | null>;
-  <U>(label: string | object, fn: (m: MeasureFn) => Promise<U>): Promise<U | null>;
-  (label: string | object): Promise<null>;
+export type MeasureEvent = {
+  type: 'start' | 'success' | 'error' | 'annotation';
+  id: string; label: string; depth: number;
+  duration?: number; result?: unknown; error?: unknown;
+  meta?: Record<string, unknown>; budget?: number;
 };
-
-export type MeasureSyncFn = {
-  <U>(label: string | object, fn: () => U): U | null;
-  <U>(label: string | object, fn: (m: MeasureSyncFn) => U): U | null;
-  (label: string | object): null;
-};
+export type TimedResult<T> = { result: T | null; duration: number };
+export type RetryOpts = { attempts?: number; delay?: number; backoff?: number };
+export type BatchOpts = { every?: number };
 ```
 
 ## Zero Dependencies
 
-`measure-fn` has **zero runtime dependencies**. It uses only `performance.now()` and `console.log`/`console.error`. It works in Bun, Node, Deno, or any JavaScript runtime.
+Works in Bun, Node, Deno. Uses only `performance.now()` and `console`.
 
 ## License
 
