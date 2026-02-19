@@ -65,6 +65,20 @@ const logError = (fullIdChainStr: string, duration: number, error: unknown) => {
   }
 };
 
+/** Nested measure function — label first, fn second (or just a label for annotation) */
+export type MeasureFn = {
+  <U>(label: string | object, fn: () => Promise<U>): Promise<U | null>;
+  <U>(label: string | object, fn: (m: MeasureFn) => Promise<U>): Promise<U | null>;
+  (label: string | object): Promise<null>;
+};
+
+/** Nested measureSync function — label first, fn second (or just a label for annotation) */
+export type MeasureSyncFn = {
+  <U>(label: string | object, fn: () => U): U | null;
+  <U>(label: string | object, fn: (m: MeasureSyncFn) => U): U | null;
+  (label: string | object): null;
+};
+
 const createNestedResolver = (
   isAsync: boolean,
   fullIdChain: string[],
@@ -72,13 +86,15 @@ const createNestedResolver = (
   resolver: <U>(fn: any, action: any, chain: (string | number)[]) => Promise<U | null> | (U | null)
 ) => {
   return (...args: any[]) => {
-    if (typeof args[0] === 'function') {
-      const nestedFn = args[0];
-      const nestedAction = args[1] || 'noop';
+    // New order: (label, fn?) — label is always first
+    const label = args[0];
+    const fn = args[1];
+
+    if (typeof fn === 'function') {
       const childParentChain = [...fullIdChain, childCounterRef.value++];
-      return resolver(nestedFn, nestedAction, childParentChain);
+      return resolver(fn, label, childParentChain);
     } else {
-      logNested(`[${fullIdChain.join('-')}]`, args[0]);
+      logNested(`[${fullIdChain.join('-')}]`, label);
       return isAsync ? Promise.resolve(null) : null;
     }
   };
@@ -86,12 +102,31 @@ const createNestedResolver = (
 
 let globalRootCounter = 0;
 
+/** Reset the global counter — useful for deterministic test output */
+export const resetCounter = () => {
+  globalRootCounter = 0;
+};
+
+/**
+ * Measure an async operation with hierarchical logging.
+ *
+ * @param label - A string or object describing the operation
+ * @param fn - The async function to measure (receives nested `measure` as argument)
+ *
+ * @example
+ * ```ts
+ * await measure('Fetch users', async (m) => {
+ *   const user = await m('Get user 1', () => fetchUser(1));
+ *   await m('Get posts', () => fetchPosts(user.id));
+ * });
+ * ```
+ */
 export const measure = async <T = null>(
-  arg1: ((measure: typeof measure) => Promise<T>) | string | object,
-  action?: string | object
+  arg1: string | object,
+  arg2?: ((measure: MeasureFn) => Promise<T>)
 ): Promise<T | null> => {
   const _measureInternal = async <U>(
-    fnInternal: (measure: (fn: any, action: any) => Promise<U | null>) => Promise<U>,
+    fnInternal: (measure: MeasureFn) => Promise<U>,
     actionInternal: string | object,
     parentIdChain: (string | number)[]
   ): Promise<U | null> => {
@@ -107,7 +142,7 @@ export const measure = async <T = null>(
     const measureForNextLevel = createNestedResolver(true, fullIdChain, childCounterRef, _measureInternal);
 
     try {
-      const result = await fnInternal(measureForNextLevel);
+      const result = await fnInternal(measureForNextLevel as MeasureFn);
       const duration = performance.now() - start;
       logSuccess(fullIdChainStr, duration);
       return result;
@@ -118,8 +153,8 @@ export const measure = async <T = null>(
     }
   };
 
-  if (typeof arg1 === 'function') {
-    return _measureInternal(arg1 as any, action || 'noop', [globalRootCounter++]) as Promise<T | null>;
+  if (typeof arg2 === 'function') {
+    return _measureInternal(arg2, arg1, [globalRootCounter++]) as Promise<T | null>;
   } else {
     const currentId = toAlpha(globalRootCounter++);
     const fullIdChainStr = `[${currentId}]`;
@@ -128,12 +163,25 @@ export const measure = async <T = null>(
   }
 };
 
+/**
+ * Measure a synchronous operation with hierarchical logging.
+ *
+ * @param label - A string or object describing the operation
+ * @param fn - The sync function to measure (receives nested `measureSync` as argument)
+ *
+ * @example
+ * ```ts
+ * const result = measureSync('Parse config', () => {
+ *   return JSON.parse(configStr);
+ * });
+ * ```
+ */
 export const measureSync = <T = null>(
-  arg1: ((measure: typeof measureSync) => T) | string | object,
-  action?: string | object
+  arg1: string | object,
+  arg2?: ((measure: MeasureSyncFn) => T)
 ): T | null => {
   const _measureInternalSync = <U>(
-    fnInternal: (measure: (fn: any, action: any) => U | null) => U,
+    fnInternal: (measure: MeasureSyncFn) => U,
     actionInternal: string | object,
     parentIdChain: (string | number)[]
   ): U | null => {
@@ -149,7 +197,7 @@ export const measureSync = <T = null>(
     const measureForNextLevel = createNestedResolver(false, fullIdChain, childCounterRef, _measureInternalSync);
 
     try {
-      const result = fnInternal(measureForNextLevel);
+      const result = fnInternal(measureForNextLevel as MeasureSyncFn);
       const duration = performance.now() - start;
       logSuccess(fullIdChainStr, duration);
       return result;
@@ -160,8 +208,8 @@ export const measureSync = <T = null>(
     }
   };
 
-  if (typeof arg1 === 'function') {
-    return _measureInternalSync(arg1 as any, action || 'noop', [globalRootCounter++]) as T | null;
+  if (typeof arg2 === 'function') {
+    return _measureInternalSync(arg2, arg1, [globalRootCounter++]) as T | null;
   } else {
     const currentId = toAlpha(globalRootCounter++);
     const fullIdChainStr = `[${currentId}]`;
