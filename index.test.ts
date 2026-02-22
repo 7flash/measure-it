@@ -463,16 +463,11 @@ describe("onError (3rd argument)", () => {
         expect(captured).toBe(original);
     });
 
-    test("onError can rethrow (same as assert)", async () => {
+    test("onError rethrow returns null (caught by safety net)", async () => {
         const out = captureConsole();
-        const original = new Error('critical');
-        try {
-            await measure('Op', async () => { throw original; }, (e) => { throw e; });
-            expect(true).toBe(false);
-        } catch (e) {
-            expect(e).toBe(original);
-        }
+        const result = await measure('Op', async () => { throw new Error('critical'); }, (e) => { throw e; });
         out.restore();
+        expect(result).toBeNull();
     });
 
     test("onError can inspect error type and recover", async () => {
@@ -512,8 +507,72 @@ describe("onError (3rd argument)", () => {
         expect(result!.status).toBe(500);
         expect(await result!.text()).toContain('route error');
     });
+
+    test("if onError itself throws, returns null instead of crashing", async () => {
+        const out = captureConsole();
+        const result = await measure('Primary DB', async () => {
+            throw new Error('primary failed');
+        }, (error) => {
+            // fallback DB call also fails
+            throw new Error('backup DB also failed');
+        });
+        out.restore();
+        expect(result).toBeNull();
+        // should log both errors
+        expect(out.errors.some(l => l.includes('primary failed'))).toBe(true);
+        expect(out.errors.some(l => l.includes('backup DB also failed'))).toBe(true);
+    });
 });
 
+// ─── timeout ─────────────────────────────────────────────────────────
+
+describe("timeout", () => {
+    beforeEach(() => {
+        resetCounter();
+        configure({ silent: false, logger: null, timestamps: false });
+    });
+
+    test("aborts and returns null if function exceeds timeout", async () => {
+        const out = captureConsole();
+        const result = await measure(
+            { label: 'Slow op', timeout: 50 },
+            async () => {
+                await new Promise(r => setTimeout(r, 200));
+                return 'done';
+            }
+        );
+        out.restore();
+        expect(result).toBeNull();
+        expect(out.errors.some(l => l.includes('Timeout'))).toBe(true);
+    });
+
+    test("succeeds if function completes within timeout", async () => {
+        const out = captureConsole();
+        const result = await measure(
+            { label: 'Fast op', timeout: 200 },
+            async () => {
+                await new Promise(r => setTimeout(r, 10));
+                return 'done';
+            }
+        );
+        out.restore();
+        expect(result).toBe('done');
+    });
+
+    test("timeout with onError returns fallback", async () => {
+        const out = captureConsole();
+        const result = await measure(
+            { label: 'Slow op', timeout: 50 },
+            async () => {
+                await new Promise(r => setTimeout(r, 200));
+                return 'done';
+            },
+            (error) => 'timed-out'
+        );
+        out.restore();
+        expect(result).toBe('timed-out');
+    });
+});
 // ─── measure.wrap ────────────────────────────────────────────────────
 
 describe("measure.wrap", () => {

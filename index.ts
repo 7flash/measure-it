@@ -115,6 +115,12 @@ const extractBudget = (actionInternal: string | object): number | undefined => {
   return undefined;
 };
 
+const extractTimeout = (actionInternal: string | object): number | undefined => {
+  if (typeof actionInternal !== 'object' || actionInternal === null) return undefined;
+  if ('timeout' in actionInternal) return Number((actionInternal as any).timeout);
+  return undefined;
+};
+
 const extractMeta = (actionInternal: string | object): Record<string, unknown> | undefined => {
   if (typeof actionInternal !== 'object' || actionInternal === null) return undefined;
   const details = { ...actionInternal };
@@ -263,6 +269,7 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }) => {
     const childCounterRef = { value: 0 };
     const label = buildActionLabel(actionInternal);
     const budget = extractBudget(actionInternal);
+    const timeout = extractTimeout(actionInternal);
 
     const currentId = toAlpha(parentIdChain.pop() ?? 0);
     const fullIdChain = [...parentIdChain, currentId];
@@ -279,7 +286,17 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }) => {
     const measureForNextLevel = createNestedResolver(true, fullIdChain, childCounterRef, depth, _measureInternal, prefix);
 
     try {
-      const result = await fnInternal(measureForNextLevel as MeasureFn);
+      let result: U;
+      if (timeout && timeout > 0) {
+        result = await Promise.race([
+          fnInternal(measureForNextLevel as MeasureFn),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Timeout (${formatDuration(timeout)})`)), timeout)
+          ),
+        ]);
+      } else {
+        result = await fnInternal(measureForNextLevel as MeasureFn);
+      }
       const duration = performance.now() - start;
       emit({ type: 'success', id: idStr, label, depth, duration, result, budget }, prefix);
       return result;
@@ -287,7 +304,15 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }) => {
       const duration = performance.now() - start;
       emit({ type: 'error', id: idStr, label, depth, duration, error, budget }, prefix);
       _lastError = error;
-      if (onError) return onError(error);
+      if (onError) {
+        try {
+          return onError(error);
+        } catch (onErrorError) {
+          emit({ type: 'error', id: idStr, label: `${label} (onError)`, depth, duration: performance.now() - start, error: onErrorError, budget }, prefix);
+          _lastError = onErrorError;
+          return null;
+        }
+      }
       return null;
     }
   };

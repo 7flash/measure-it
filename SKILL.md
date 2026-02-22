@@ -104,11 +104,19 @@ const result = await measure.retry('External API', {
 }, () => callExternalService());
 ```
 
-### 7. Budget warnings for slow ops
+### 7. Budget warnings and timeouts
 
 ```typescript
+// Budget: warns but doesn't stop
 await measure({ label: 'DB query', budget: 100 }, () => heavyQuery());
 // → [a] ✓ DB query 245ms → [...] ⚠ OVER BUDGET (100ms)
+
+// Timeout: aborts after N ms, returns null
+await measure({ label: 'External API', timeout: 5000 }, () => fetchSlowApi());
+// > 5s → [a] ✗ External API 5.0s (Timeout (5.0s))
+
+// Both together: budget warns, timeout enforces
+await measure({ label: 'Query', budget: 100, timeout: 5000 }, () => db.query('...'));
 ```
 
 ### 8. Assert non-null results
