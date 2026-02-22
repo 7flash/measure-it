@@ -214,16 +214,17 @@ const createNestedResolver = (
   fullIdChain: string[],
   childCounterRef: { value: number },
   depth: number,
-  resolver: <U>(fn: any, action: any, chain: (string | number)[], depth: number) => Promise<U | null> | (U | null),
+  resolver: <U>(fn: any, action: any, chain: (string | number)[], depth: number, onError?: (error: unknown) => any) => Promise<U | null> | (U | null),
   prefix?: string
 ) => {
   return (...args: any[]) => {
     const label = args[0];
     const fn = args[1];
+    const onError = args[2];
 
     if (typeof fn === 'function') {
       const childParentChain = [...fullIdChain, childCounterRef.value++];
-      return resolver(fn, label, childParentChain, depth + 1);
+      return resolver(fn, label, childParentChain, depth + 1, typeof onError === 'function' ? onError : undefined);
     } else {
       emit({
         type: 'annotation',
@@ -249,12 +250,14 @@ export const resetCounter = () => {
 
 const createMeasureImpl = (prefix?: string, counterRef?: { value: number }) => {
   const counter = counterRef ?? { get value() { return globalRootCounter; }, set value(v) { globalRootCounter = v; } };
+  let _lastError: unknown = null;
 
   const _measureInternal = async <U>(
     fnInternal: (measure: MeasureFn) => Promise<U>,
     actionInternal: string | object,
     parentIdChain: (string | number)[],
-    depth: number
+    depth: number,
+    onError?: (error: unknown) => any
   ): Promise<U | null> => {
     const start = performance.now();
     const childCounterRef = { value: 0 };
@@ -283,6 +286,8 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }) => {
     } catch (error) {
       const duration = performance.now() - start;
       emit({ type: 'error', id: idStr, label, depth, duration, error, budget }, prefix);
+      _lastError = error;
+      if (onError) return onError(error);
       return null;
     }
   };
@@ -323,6 +328,7 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }) => {
     } catch (error) {
       const duration = performance.now() - start;
       emit({ type: 'error', id: idStr, label, depth, duration, error, budget }, prefix);
+      _lastError = error;
       return null;
     }
   };
@@ -331,10 +337,11 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }) => {
 
   const measureFn = async <T = null>(
     arg1: string | object,
-    arg2?: ((measure: MeasureFn) => Promise<T>)
+    arg2?: ((measure: MeasureFn) => Promise<T>) | ((measure: MeasureFn) => T),
+    arg3?: (error: unknown) => any
   ): Promise<T | null> => {
     if (typeof arg2 === 'function') {
-      return _measureInternal(arg2, arg1, [counter.value++], 0) as Promise<T | null>;
+      return _measureInternal(arg2 as any, arg1, [counter.value++], 0, arg3) as Promise<T | null>;
     } else {
       const currentId = toAlpha(counter.value++);
       emit({
@@ -405,7 +412,9 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }) => {
   ): Promise<T> => {
     const result = await measureFn(arg1, arg2 as any);
     if (result === null) {
-      throw new Error(`measure.assert: "${buildActionLabel(arg1)}" returned null`);
+      const cause = _lastError;
+      _lastError = null;
+      throw new Error(`measure.assert: "${buildActionLabel(arg1)}" failed`, { cause });
     }
     return result;
   };
@@ -507,7 +516,9 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }) => {
   ): T => {
     const result = measureSyncFn(arg1, arg2 as any);
     if (result === null) {
-      throw new Error(`measureSync.assert: "${buildActionLabel(arg1)}" returned null`);
+      const cause = _lastError;
+      _lastError = null;
+      throw new Error(`measureSync.assert: "${buildActionLabel(arg1)}" failed`, { cause });
     }
     return result;
   };

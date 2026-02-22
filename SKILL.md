@@ -139,6 +139,52 @@ await measure('Server ready');           // → [a] = Server ready
 measureSync('Config loaded');             // → [b] = Config loaded
 ```
 
+### 11. Error handling — `onError` 3rd argument
+
+`measure` never throws. Pass an `onError` handler as 3rd argument to handle errors:
+
+```typescript
+// Default: null on error
+const user = await measure('Fetch user', () => fetchUser(1));
+
+// Recovery: fallback on error
+const user = await measure('Fetch user', () => fetchUser(1),
+  (error) => defaultUser
+);
+
+// Error inspection: handle known errors, rethrow unknown
+const user = await measure('Fetch user', () => fetchUser(1),
+  (error) => {
+    if (error instanceof NetworkError) return cachedUser;
+    throw error;
+  }
+);
+
+// Bun.serve: always return a Response
+Bun.serve({
+  fetch: (req) => measure(
+    { label: `${req.method} ${req.url}` },
+    () => handleRequest(req),
+    (error) => new Response('Internal Server Error', { status: 500 })
+  ),
+});
+```
+
+`.assert()` re-throws on error with `.cause` = original error:
+
+```typescript
+await measure.assert('Op', () => work());
+// throws: Error('measure.assert: "Op" failed', { cause: originalError })
+```
+
+## Error Model
+
+| Pattern | On error | Use when |
+|---------|----------|----------|
+| `measure(label, fn)` | logs `✗`, returns `null` | Default — pipeline resilience |
+| `measure(label, fn, onError)` | logs `✗`, calls `onError(error)` | Recovery, fallbacks, error inspection |
+| `measure.assert(label, fn)` | logs `✗`, throws with `.cause` | Must have non-null |
+
 ## Configuration
 
 ```typescript
@@ -184,7 +230,7 @@ await measure('Outer', async (m) => {
 
 | Export | Use |
 |--------|-----|
-| `measure(label, fn?)` | Async measurement |
+| `measure(label, fn?, onError?)` | Async measurement (onError handles expected errors) |
 | `measureSync(label, fn?)` | Sync measurement |
 | `measure.wrap(label, fn)` | Decorator — wrap once, measure every call |
 | `measure.batch(label, items, fn, opts?)` | Array + progress |

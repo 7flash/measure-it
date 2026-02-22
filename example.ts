@@ -98,4 +98,59 @@ async function main() {
   });
 }
 
-main().then(() => console.log('\n✅ Done.'));
+// ─── Bun.serve patterns ──────────────────────────────────────────────
+// measure() returns T | null — on error it returns null instead of throwing.
+// Use the onError 3rd argument to provide a fallback Response.
+
+async function bunServeExample() {
+  console.log('\n─── Bun.serve Patterns ─────────────────────────────');
+
+  // ✅ Pattern 1: onError — graceful 500 fallback with error details
+  const server1 = Bun.serve({
+    port: 0,
+    fetch: (req) => measure(
+      { label: `${req.method} ${new URL(req.url).pathname}` },
+      async () => {
+        const url = new URL(req.url);
+        if (url.pathname === '/fail') throw new Error('Route error');
+        return new Response(`ok: ${url.pathname}`);
+      },
+      (error) => new Response(`Error: ${(error as Error).message}`, { status: 500 })
+    ),
+  });
+
+  // ✅ Pattern 2: measure.assert — throws on error (sugar for onError + throw)
+  const server2 = Bun.serve({
+    port: 0,
+    fetch: (req) => measure.assert('Handle request', async () => {
+      const url = new URL(req.url);
+      if (url.pathname === '/fail') throw new Error('Route error');
+      return new Response(`ok: ${url.pathname}`);
+    }),
+  });
+
+  // Test Pattern 1: onError returns fallback Response
+  const r1ok = await fetch(`http://localhost:${server1.port}/hello`);
+  console.log(`  onError pattern (ok): ${r1ok.status} ${await r1ok.text()}`);
+
+  const r1fail = await fetch(`http://localhost:${server1.port}/fail`);
+  console.log(`  onError pattern (fail): ${r1fail.status} ${await r1fail.text()}`);
+
+  // Test Pattern 2: assert
+  const r2ok = await fetch(`http://localhost:${server2.port}/hello`);
+  console.log(`  assert pattern (ok): ${r2ok.status} ${await r2ok.text()}`);
+
+  try {
+    await fetch(`http://localhost:${server2.port}/fail`);
+  } catch {
+    console.log(`  assert pattern (fail): server rejected (expected)`);
+  }
+
+  server1.stop();
+  server2.stop();
+}
+
+main()
+  .then(() => console.log('\n✅ Done.'))
+  .then(() => bunServeExample())
+  .then(() => console.log('\n✅ Bun.serve example done.'));

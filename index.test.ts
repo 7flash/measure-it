@@ -394,13 +394,15 @@ describe("measure.assert", () => {
         expect(r).toBe(42);
     });
 
-    test("throws on error", async () => {
+    test("throws on error with original cause", async () => {
         const out = captureConsole();
+        const original = new Error("connection refused");
         try {
-            await measure.assert("fail", async () => { throw new Error("x"); });
+            await measure.assert("fail", async () => { throw original; });
             expect(true).toBe(false);
         } catch (e: any) {
             expect(e.message).toContain("fail");
+            expect(e.cause).toBe(original);
         }
         out.restore();
     });
@@ -411,15 +413,104 @@ describe("measure.assert", () => {
         out.restore();
     });
 
-    test("sync assert throws", () => {
+    test("sync assert throws with original cause", () => {
         const out = captureConsole();
+        const original = new Error("parse error");
         try {
-            measureSync.assert("fail", () => { throw new Error("x"); });
+            measureSync.assert("fail", () => { throw original; });
             expect(true).toBe(false);
         } catch (e: any) {
             expect(e.message).toContain("fail");
+            expect(e.cause).toBe(original);
         }
         out.restore();
+    });
+});
+
+// ─── onError (3rd argument) ──────────────────────────────────────────
+
+describe("onError (3rd argument)", () => {
+    beforeEach(() => {
+        resetCounter();
+        configure({ silent: false, logger: null, timestamps: false });
+    });
+
+    test("returns fallback from onError on failure", async () => {
+        const out = captureConsole();
+        const result = await measure('Fetch user', async () => {
+            throw new Error('not found');
+        }, () => 'fallback');
+        out.restore();
+        expect(result).toBe('fallback');
+    });
+
+    test("returns normal result on success (onError ignored)", async () => {
+        const out = captureConsole();
+        const result = await measure('Fetch user', async () => 42, () => -1);
+        out.restore();
+        expect(result).toBe(42);
+    });
+
+    test("error object is passed to onError handler", async () => {
+        const out = captureConsole();
+        const original = new Error('network timeout');
+        let captured: unknown = null;
+        await measure('Fetch', async () => { throw original; }, (err) => {
+            captured = err;
+            return null;
+        });
+        out.restore();
+        expect(captured).toBe(original);
+    });
+
+    test("onError can rethrow (same as assert)", async () => {
+        const out = captureConsole();
+        const original = new Error('critical');
+        try {
+            await measure('Op', async () => { throw original; }, (e) => { throw e; });
+            expect(true).toBe(false);
+        } catch (e) {
+            expect(e).toBe(original);
+        }
+        out.restore();
+    });
+
+    test("onError can inspect error type and recover", async () => {
+        const out = captureConsole();
+        const result = await measure('Fetch', async () => {
+            throw new TypeError('invalid');
+        }, (error) => {
+            if (error instanceof TypeError) return 'recovered';
+            throw error;
+        });
+        out.restore();
+        expect(result).toBe('recovered');
+    });
+
+    test("still logs error even when onError handles it", async () => {
+        const events: any[] = [];
+        configure({ logger: (e) => events.push(e) });
+        await measure('Op', async () => { throw new Error('x'); }, () => 'fallback');
+        configure({ logger: null });
+        const errorEvent = events.find(e => e.type === 'error');
+        expect(errorEvent).toBeTruthy();
+        expect(errorEvent.label).toBe('Op');
+    });
+
+    test("Bun.serve pattern with onError fallback", async () => {
+        const out = captureConsole();
+        const result = await measure(
+            { label: 'Handle request' },
+            async () => {
+                throw new Error('route error');
+                return new Response('ok');
+            },
+            (error) => new Response(`Error: ${(error as Error).message}`, { status: 500 })
+        );
+        out.restore();
+        expect(result).toBeInstanceOf(Response);
+        expect(result!.status).toBe(500);
+        expect(await result!.text()).toContain('route error');
     });
 });
 
@@ -583,5 +674,62 @@ describe("ID generation", () => {
         expect(out.logs[0]).toStartWith("[a]");
         expect(out.logs[50]).toStartWith("[z]");
         expect(out.logs[52]).toStartWith("[aa]");
+    });
+});
+
+// ─── Bun.serve patterns ─────────────────────────────────────────────
+
+describe("Bun.serve pattern", () => {
+    beforeEach(() => {
+        resetCounter();
+        configure({ silent: false, logger: null, timestamps: false });
+    });
+
+    test("measure returns null on error — breaks fetch handler", async () => {
+        const out = captureConsole();
+        const result = await measure("handle", async () => {
+            throw new Error("route error");
+            return new Response("ok");
+        });
+        out.restore();
+        expect(result).toBeNull(); // Bun.serve would crash with null
+    });
+
+    test("measure.assert returns Response on success", async () => {
+        const out = captureConsole();
+        const result = await measure.assert("handle", async () => {
+            return new Response("ok");
+        });
+        out.restore();
+        expect(result).toBeInstanceOf(Response);
+        expect(await result.text()).toBe("ok");
+    });
+
+    test("measure.assert throws on error with cause — Bun.serve can catch it", async () => {
+        const out = captureConsole();
+        const original = new Error("route error");
+        try {
+            await measure.assert("handle", async () => {
+                throw original;
+                return new Response("ok");
+            });
+            expect(true).toBe(false); // should not reach
+        } catch (e: any) {
+            expect(e.message).toContain("handle");
+            expect(e.cause).toBe(original);
+        }
+        out.restore();
+    });
+
+    test("nullish coalescing fallback pattern", async () => {
+        const out = captureConsole();
+        const result = (await measure("handle", async () => {
+            throw new Error("route error");
+            return new Response("ok");
+        })) ?? new Response("Internal Server Error", { status: 500 });
+        out.restore();
+        expect(result).toBeInstanceOf(Response);
+        expect(result.status).toBe(500);
+        expect(await result.text()).toBe("Internal Server Error");
     });
 });
