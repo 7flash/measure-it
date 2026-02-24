@@ -12,9 +12,10 @@ const toAlpha = (num: number): string => {
 
 // ─── Safe Stringify ──────────────────────────────────────────────────
 
-let maxResultLen = 80;
+let maxResultLen = 0;
 
-export const safeStringify = (value: unknown): string => {
+export const safeStringify = (value: unknown, limit?: number): string => {
+  const cap = limit ?? maxResultLen;
   if (value === undefined) return '';
   if (value === null) return 'null';
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -22,7 +23,8 @@ export const safeStringify = (value: unknown): string => {
   if (typeof value === 'symbol') return value.toString();
   if (typeof value === 'string') {
     const q = JSON.stringify(value);
-    return q.length > maxResultLen ? q.slice(0, maxResultLen - 1) + '…"' : q;
+    if (cap === 0) return q;
+    return q.length > cap ? q.slice(0, cap - 1) + '…"' : q;
   }
   try {
     const seen = new WeakSet();
@@ -35,7 +37,8 @@ export const safeStringify = (value: unknown): string => {
       if (typeof val === 'bigint') return `${val}n`;
       return val;
     });
-    return str.length > maxResultLen ? str.slice(0, maxResultLen) + '…' : str;
+    if (cap === 0) return str;
+    return str.length > cap ? str.slice(0, cap) + '…' : str;
   } catch {
     return String(value);
   }
@@ -54,7 +57,7 @@ const formatDuration = (ms: number): string => {
 // ─── Timestamps ──────────────────────────────────────────────────────
 
 let timestamps =
-  process.env.MEASURE_TIMESTAMPS === '1' || process.env.MEASURE_TIMESTAMPS === 'true';
+  typeof process !== 'undefined' && (process.env.MEASURE_TIMESTAMPS === '1' || process.env.MEASURE_TIMESTAMPS === 'true');
 
 const ts = (): string => {
   if (!timestamps) return '';
@@ -78,12 +81,16 @@ export type MeasureEvent = {
   error?: unknown;
   meta?: Record<string, unknown>;
   budget?: number;
+  maxResultLength?: number;
 };
 
 // ─── Configuration ───────────────────────────────────────────────────
 
 export let silent =
-  process.env.MEASURE_SILENT === '1' || process.env.MEASURE_SILENT === 'true';
+  typeof process !== 'undefined' && (process.env.MEASURE_SILENT === '1' || process.env.MEASURE_SILENT === 'true');
+
+let dotEndLabel = true;
+let dotChar = '·';
 
 export let logger: ((event: MeasureEvent) => void) | null = null;
 
@@ -92,6 +99,8 @@ export type ConfigureOpts = {
   logger?: ((event: MeasureEvent) => void) | null;
   timestamps?: boolean;
   maxResultLength?: number;
+  dotEndLabel?: boolean;
+  dotChar?: string;
 };
 
 export const configure = (opts: ConfigureOpts) => {
@@ -99,6 +108,8 @@ export const configure = (opts: ConfigureOpts) => {
   if (opts.logger !== undefined) logger = opts.logger;
   if (opts.timestamps !== undefined) timestamps = opts.timestamps;
   if (opts.maxResultLength !== undefined) maxResultLen = opts.maxResultLength;
+  if (opts.dotEndLabel !== undefined) dotEndLabel = opts.dotEndLabel;
+  if (opts.dotChar !== undefined) dotChar = opts.dotChar;
 };
 
 // ─── Shared Helpers ──────────────────────────────────────────────────
@@ -115,11 +126,24 @@ const extractBudget = (actionInternal: string | object): number | undefined => {
   return undefined;
 };
 
+const extractTimeout = (actionInternal: string | object): number | undefined => {
+  if (typeof actionInternal !== 'object' || actionInternal === null) return undefined;
+  if ('timeout' in actionInternal) return Number((actionInternal as any).timeout);
+  return undefined;
+};
+
+const extractMaxResultLength = (actionInternal: string | object): number | undefined => {
+  if (typeof actionInternal !== 'object' || actionInternal === null) return undefined;
+  if ('maxResultLength' in actionInternal) return Number((actionInternal as any).maxResultLength);
+  return undefined;
+};
+
 const extractMeta = (actionInternal: string | object): Record<string, unknown> | undefined => {
   if (typeof actionInternal !== 'object' || actionInternal === null) return undefined;
   const details = { ...actionInternal };
   if ('label' in details) delete (details as any).label;
   if ('budget' in details) delete (details as any).budget;
+  if ('maxResultLength' in details) delete (details as any).maxResultLength;
   if (Object.keys(details).length === 0) return undefined;
   return details as Record<string, unknown>;
 };
@@ -151,20 +175,22 @@ const defaultLogger = (event: MeasureEvent, prefix?: string) => {
       console.log(`${t}${id} ... ${event.label}${formatMeta(event.meta)}`);
       break;
     case 'success': {
-      const resultStr = event.result !== undefined ? safeStringify(event.result) : '';
+      const endLabel = dotEndLabel ? dotChar.repeat(event.label.length) : event.label;
+      const resultStr = event.result !== undefined ? safeStringify(event.result, event.maxResultLength) : '';
       const arrow = resultStr ? ` → ${resultStr}` : '';
       const budgetWarn = event.budget && event.duration! > event.budget
         ? ` ⚠ OVER BUDGET (${formatDuration(event.budget)})`
         : '';
-      console.log(`${t}${id} ✓ ${event.label} ${formatDuration(event.duration!)}${arrow}${budgetWarn}`);
+      console.log(`${t}${id} ${endLabel} ${formatDuration(event.duration!)}${arrow}${budgetWarn}`);
       break;
     }
     case 'error': {
+      const endLabel = dotEndLabel ? dotChar.repeat(event.label.length) : event.label;
       const errorMsg = event.error instanceof Error ? event.error.message : String(event.error);
       const budgetWarn = event.budget && event.duration! > event.budget
         ? ` ⚠ OVER BUDGET (${formatDuration(event.budget)})`
         : '';
-      console.log(`${t}${id} ✗ ${event.label} ${formatDuration(event.duration!)} (${errorMsg})${budgetWarn}`);
+      console.log(`${t}${id} ✗ ${endLabel} ${formatDuration(event.duration!)} (${errorMsg})${budgetWarn}`);
       if (event.error instanceof Error) {
         console.error(`${id}`, event.error.stack ?? event.error.message);
         if (event.error.cause) {
@@ -214,8 +240,9 @@ const createNestedResolver = (
   fullIdChain: string[],
   childCounterRef: { value: number },
   depth: number,
-  resolver: <U>(fn: any, action: any, chain: (string | number)[], depth: number, onError?: (error: unknown) => any) => Promise<U | null> | (U | null),
-  prefix?: string
+  resolver: <U>(fn: any, action: any, chain: (string | number)[], depth: number, onError?: (error: unknown) => any, inheritedMaxLen?: number) => Promise<U | null> | (U | null),
+  prefix?: string,
+  inheritedMaxLen?: number
 ) => {
   return (...args: any[]) => {
     const label = args[0];
@@ -224,7 +251,7 @@ const createNestedResolver = (
 
     if (typeof fn === 'function') {
       const childParentChain = [...fullIdChain, childCounterRef.value++];
-      return resolver(fn, label, childParentChain, depth + 1, typeof onError === 'function' ? onError : undefined);
+      return resolver(fn, label, childParentChain, depth + 1, typeof onError === 'function' ? onError : undefined, inheritedMaxLen);
     } else {
       emit({
         type: 'annotation',
@@ -257,12 +284,16 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }) => {
     actionInternal: string | object,
     parentIdChain: (string | number)[],
     depth: number,
-    onError?: (error: unknown) => any
+    onError?: (error: unknown) => any,
+    inheritedMaxLen?: number
   ): Promise<U | null> => {
     const start = performance.now();
     const childCounterRef = { value: 0 };
     const label = buildActionLabel(actionInternal);
     const budget = extractBudget(actionInternal);
+    const timeout = extractTimeout(actionInternal);
+    const localMaxLen = extractMaxResultLength(actionInternal);
+    const effectiveMaxLen = localMaxLen ?? inheritedMaxLen;
 
     const currentId = toAlpha(parentIdChain.pop() ?? 0);
     const fullIdChain = [...parentIdChain, currentId];
@@ -276,18 +307,36 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }) => {
       meta: extractMeta(actionInternal),
     }, prefix);
 
-    const measureForNextLevel = createNestedResolver(true, fullIdChain, childCounterRef, depth, _measureInternal, prefix);
+    const measureForNextLevel = createNestedResolver(true, fullIdChain, childCounterRef, depth, _measureInternal, prefix, effectiveMaxLen);
 
     try {
-      const result = await fnInternal(measureForNextLevel as MeasureFn);
+      let result: U;
+      if (timeout && timeout > 0) {
+        result = await Promise.race([
+          fnInternal(measureForNextLevel as MeasureFn),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Timeout (${formatDuration(timeout)})`)), timeout)
+          ),
+        ]);
+      } else {
+        result = await fnInternal(measureForNextLevel as MeasureFn);
+      }
       const duration = performance.now() - start;
-      emit({ type: 'success', id: idStr, label, depth, duration, result, budget }, prefix);
+      emit({ type: 'success', id: idStr, label, depth, duration, result, budget, maxResultLength: effectiveMaxLen }, prefix);
       return result;
     } catch (error) {
       const duration = performance.now() - start;
-      emit({ type: 'error', id: idStr, label, depth, duration, error, budget }, prefix);
+      emit({ type: 'error', id: idStr, label, depth, duration, error, budget, maxResultLength: effectiveMaxLen }, prefix);
       _lastError = error;
-      if (onError) return onError(error);
+      if (onError) {
+        try {
+          return onError(error);
+        } catch (onErrorError) {
+          emit({ type: 'error', id: idStr, label: `${label} (onError)`, depth, duration: performance.now() - start, error: onErrorError, budget, maxResultLength: effectiveMaxLen }, prefix);
+          _lastError = onErrorError;
+          return null;
+        }
+      }
       return null;
     }
   };
@@ -296,13 +345,17 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }) => {
     fnInternal: (measure: MeasureSyncFn) => U,
     actionInternal: string | object,
     parentIdChain: (string | number)[],
-    depth: number
+    depth: number,
+    _onError?: undefined,
+    inheritedMaxLen?: number
   ): U | null => {
     const start = performance.now();
     const childCounterRef = { value: 0 };
     const label = buildActionLabel(actionInternal);
     const hasNested = fnInternal.length > 0;
     const budget = extractBudget(actionInternal);
+    const localMaxLen = extractMaxResultLength(actionInternal);
+    const effectiveMaxLen = localMaxLen ?? inheritedMaxLen;
 
     const currentId = toAlpha(parentIdChain.pop() ?? 0);
     const fullIdChain = [...parentIdChain, currentId];
@@ -318,16 +371,16 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }) => {
       }, prefix);
     }
 
-    const measureForNextLevel = createNestedResolver(false, fullIdChain, childCounterRef, depth, _measureInternalSync, prefix);
+    const measureForNextLevel = createNestedResolver(false, fullIdChain, childCounterRef, depth, _measureInternalSync, prefix, effectiveMaxLen);
 
     try {
       const result = fnInternal(measureForNextLevel as MeasureSyncFn);
       const duration = performance.now() - start;
-      emit({ type: 'success', id: idStr, label, depth, duration, result, budget }, prefix);
+      emit({ type: 'success', id: idStr, label, depth, duration, result, budget, maxResultLength: effectiveMaxLen }, prefix);
       return result;
     } catch (error) {
       const duration = performance.now() - start;
-      emit({ type: 'error', id: idStr, label, depth, duration, error, budget }, prefix);
+      emit({ type: 'error', id: idStr, label, depth, duration, error, budget, maxResultLength: effectiveMaxLen }, prefix);
       _lastError = error;
       return null;
     }

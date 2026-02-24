@@ -21,7 +21,7 @@ function captureConsole() {
 describe("measure (async)", () => {
     beforeEach(() => {
         resetCounter();
-        configure({ silent: false, logger: null, timestamps: false, maxResultLength: 80 });
+        configure({ silent: false, logger: null, timestamps: false, maxResultLength: 200 });
     });
 
     test("runs and returns result", async () => {
@@ -31,12 +31,12 @@ describe("measure (async)", () => {
         expect(result).toBe(42);
     });
 
-    test("logs start ... and success ✓ with result", async () => {
+    test("logs start ... and success with result", async () => {
         const out = captureConsole();
         await measure("fetch", async () => "ok");
         out.restore();
         expect(out.logs[0]).toBe("[a] ... fetch");
-        expect(out.logs[1]).toMatch(/\[a\] ✓ fetch .* → "ok"/);
+        expect(out.logs[1]).toMatch(/\[a\] ····· .* → "ok"/);
     });
 
     test("no arrow for undefined", async () => {
@@ -115,7 +115,7 @@ describe("measure (async)", () => {
 describe("measureSync", () => {
     beforeEach(() => {
         resetCounter();
-        configure({ silent: false, logger: null, timestamps: false, maxResultLength: 80 });
+        configure({ silent: false, logger: null, timestamps: false, maxResultLength: 200 });
     });
 
     test("leaf = single line with result", () => {
@@ -123,7 +123,7 @@ describe("measureSync", () => {
         measureSync("compute", () => 100);
         out.restore();
         expect(out.logs.length).toBe(1);
-        expect(out.logs[0]).toMatch(/\[a\] ✓ compute .* → 100/);
+        expect(out.logs[0]).toMatch(/\[a\] ······· .* → 100/);
     });
 
     test("with children = start + end", () => {
@@ -131,8 +131,8 @@ describe("measureSync", () => {
         measureSync("parent", (m) => { m("child", () => 10); return 20; });
         out.restore();
         expect(out.logs[0]).toBe("[a] ... parent");
-        expect(out.logs[1]).toMatch(/\[a-a\] ✓ child .* → 10/);
-        expect(out.logs[2]).toMatch(/\[a\] ✓ parent .* → 20/);
+        expect(out.logs[1]).toMatch(/\[a-a\] ····· .* → 10/);
+        expect(out.logs[2]).toMatch(/\[a\] ······ .* → 20/);
     });
 
     test("error returns null", () => {
@@ -178,7 +178,7 @@ describe("formatDuration", () => {
 describe("safeStringify", () => {
     beforeEach(() => {
         resetCounter();
-        configure({ silent: false, logger: null, timestamps: false, maxResultLength: 80 });
+        configure({ silent: false, logger: null, timestamps: false, maxResultLength: 200 });
     });
 
     test("circular handled", () => {
@@ -247,7 +247,7 @@ describe("timestamps", () => {
 describe("configurable truncation", () => {
     beforeEach(() => {
         resetCounter();
-        configure({ silent: false, logger: null, timestamps: false, maxResultLength: 80 });
+        configure({ silent: false, logger: null, timestamps: false, maxResultLength: 200 });
     });
 
     test("shorter truncation", () => {
@@ -264,6 +264,52 @@ describe("configurable truncation", () => {
         measureSync("f", () => ({ d: "x".repeat(100) }));
         out.restore();
         expect(out.logs[0]).not.toContain("…");
+    });
+
+    test("per-label maxResultLength overrides global", () => {
+        configure({ maxResultLength: 500 });
+        const out = captureConsole();
+        measureSync({ label: "op", maxResultLength: 15 }, () => ({ d: "x".repeat(50) }));
+        out.restore();
+        expect(out.logs[0]).toContain("…");
+    });
+
+    test("per-label maxResultLength inherits to children", () => {
+        const out = captureConsole();
+        measureSync({ label: "parent", maxResultLength: 15 }, (m) => {
+            m("child", () => ({ d: "x".repeat(50) }));
+            return 1;
+        });
+        out.restore();
+        const childLine = out.logs[1]; // [a-a] line
+        expect(childLine).toContain("…");
+    });
+
+    test("child can override inherited maxResultLength", () => {
+        const out = captureConsole();
+        measureSync({ label: "parent", maxResultLength: 15 }, (m) => {
+            m({ label: "child", maxResultLength: 500 }, () => ({ d: "x".repeat(50) }));
+            return 1;
+        });
+        out.restore();
+        const childLine = out.logs[1]; // child line
+        expect(childLine).not.toContain("…");
+    });
+
+    test("maxResultLength: 0 means unlimited", () => {
+        const out = captureConsole();
+        measureSync({ label: "op", maxResultLength: 0 }, () => ({ d: "x".repeat(500) }));
+        out.restore();
+        expect(out.logs[0]).not.toContain("…");
+        expect(out.logs[0]).toContain("x".repeat(500));
+    });
+
+    test("maxResultLength not shown in meta", () => {
+        const out = captureConsole();
+        measureSync({ label: "op", maxResultLength: 50 }, (m) => { return 1; });
+        out.restore();
+        expect(out.logs[0]).toBe("[a] ... op");
+        expect(out.logs[0]).not.toContain("maxResultLength");
     });
 });
 
@@ -354,7 +400,7 @@ describe("measure.retry", () => {
         const r = await measure.retry("op", { attempts: 3, delay: 10 }, async () => 42);
         out.restore();
         expect(r).toBe(42);
-        expect(out.logs[1]).toContain("✓");
+        expect(out.logs[1]).not.toContain("✗");
         expect(out.logs[0]).toContain("[1/3]");
     });
 
@@ -368,7 +414,7 @@ describe("measure.retry", () => {
         out.restore();
         expect(r).toBe("ok");
         expect(out.logs.filter(l => l.includes("✗")).length).toBe(2);
-        expect(out.logs.filter(l => l.includes("✓")).length).toBe(1);
+        expect(out.logs.filter(l => !l.includes("✗") && !l.includes("...")).length).toBe(1);
     });
 
     test("all attempts exhausted returns null", async () => {
@@ -463,16 +509,11 @@ describe("onError (3rd argument)", () => {
         expect(captured).toBe(original);
     });
 
-    test("onError can rethrow (same as assert)", async () => {
+    test("onError rethrow returns null (caught by safety net)", async () => {
         const out = captureConsole();
-        const original = new Error('critical');
-        try {
-            await measure('Op', async () => { throw original; }, (e) => { throw e; });
-            expect(true).toBe(false);
-        } catch (e) {
-            expect(e).toBe(original);
-        }
+        const result = await measure('Op', async () => { throw new Error('critical'); }, (e) => { throw e; });
         out.restore();
+        expect(result).toBeNull();
     });
 
     test("onError can inspect error type and recover", async () => {
@@ -512,8 +553,72 @@ describe("onError (3rd argument)", () => {
         expect(result!.status).toBe(500);
         expect(await result!.text()).toContain('route error');
     });
+
+    test("if onError itself throws, returns null instead of crashing", async () => {
+        const out = captureConsole();
+        const result = await measure('Primary DB', async () => {
+            throw new Error('primary failed');
+        }, (error) => {
+            // fallback DB call also fails
+            throw new Error('backup DB also failed');
+        });
+        out.restore();
+        expect(result).toBeNull();
+        // should log both errors
+        expect(out.errors.some(l => l.includes('primary failed'))).toBe(true);
+        expect(out.errors.some(l => l.includes('backup DB also failed'))).toBe(true);
+    });
 });
 
+// ─── timeout ─────────────────────────────────────────────────────────
+
+describe("timeout", () => {
+    beforeEach(() => {
+        resetCounter();
+        configure({ silent: false, logger: null, timestamps: false });
+    });
+
+    test("aborts and returns null if function exceeds timeout", async () => {
+        const out = captureConsole();
+        const result = await measure(
+            { label: 'Slow op', timeout: 50 },
+            async () => {
+                await new Promise(r => setTimeout(r, 200));
+                return 'done';
+            }
+        );
+        out.restore();
+        expect(result).toBeNull();
+        expect(out.errors.some(l => l.includes('Timeout'))).toBe(true);
+    });
+
+    test("succeeds if function completes within timeout", async () => {
+        const out = captureConsole();
+        const result = await measure(
+            { label: 'Fast op', timeout: 200 },
+            async () => {
+                await new Promise(r => setTimeout(r, 10));
+                return 'done';
+            }
+        );
+        out.restore();
+        expect(result).toBe('done');
+    });
+
+    test("timeout with onError returns fallback", async () => {
+        const out = captureConsole();
+        const result = await measure(
+            { label: 'Slow op', timeout: 50 },
+            async () => {
+                await new Promise(r => setTimeout(r, 200));
+                return 'done';
+            },
+            (error) => 'timed-out'
+        );
+        out.restore();
+        expect(result).toBe('timed-out');
+    });
+});
 // ─── measure.wrap ────────────────────────────────────────────────────
 
 describe("measure.wrap", () => {
@@ -530,7 +635,7 @@ describe("measure.wrap", () => {
         out.restore();
         expect(r).toBe(42);
         expect(out.logs[0]).toBe("[a] ... double");
-        expect(out.logs[1]).toContain("✓");
+        expect(out.logs[1]).not.toContain("✗");
     });
 
     test("multiple calls get sequential IDs", async () => {
@@ -551,7 +656,7 @@ describe("measure.wrap", () => {
         const r = wrapped(7);
         out.restore();
         expect(r).toBe(21);
-        expect(out.logs[0]).toContain("✓ triple");
+        expect(out.logs[0]).toContain("······");
     });
 });
 
@@ -569,7 +674,6 @@ describe("measure.batch", () => {
         out.restore();
         expect(results).toEqual([2, 4, 6]);
         expect(out.logs[0]).toContain("3 items");
-        expect(out.logs.at(-1)).toContain("✓");
         expect(out.logs.at(-1)).toContain("3/3 ok");
     });
 
