@@ -385,6 +385,46 @@ describe("createMeasure (scoped)", () => {
         expect(out.logs[2]).toBe("[b:a] ... y");
         expect(out.logs[4]).toBe("[a:b] ... z");
     });
+
+    test("scoped maxResultLength truncates results", () => {
+        const s = createMeasure("s", { maxResultLength: 15 });
+        s.resetCounter();
+        const out = captureConsole();
+        s.measureSync("op", () => ({ data: "x".repeat(50) }));
+        out.restore();
+        expect(out.logs[0]).toContain("…");
+    });
+
+    test("scoped maxResultLength inherits to children", () => {
+        const s = createMeasure("s", { maxResultLength: 15 });
+        s.resetCounter();
+        const out = captureConsole();
+        s.measureSync("parent", (m) => {
+            m("child", () => ({ data: "x".repeat(50) }));
+            return 1;
+        });
+        out.restore();
+        const childLine = out.logs[1];
+        expect(childLine).toContain("…");
+    });
+
+    test("per-label maxResultLength overrides scoped", () => {
+        const s = createMeasure("s", { maxResultLength: 15 });
+        s.resetCounter();
+        const out = captureConsole();
+        s.measureSync({ label: "op", maxResultLength: 500 }, () => ({ data: "x".repeat(50) }));
+        out.restore();
+        expect(out.logs[0]).not.toContain("…");
+    });
+
+    test("scoped maxResultLength works with async measure", async () => {
+        const s = createMeasure("s", { maxResultLength: 15 });
+        s.resetCounter();
+        const out = captureConsole();
+        await s.measure("op", async () => ({ data: "x".repeat(50) }));
+        out.restore();
+        expect(out.logs[1]).toContain("…");
+    });
 });
 
 // ─── measure.retry ───────────────────────────────────────────────────

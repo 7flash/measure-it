@@ -273,10 +273,13 @@ export const resetCounter = () => {
   globalRootCounter = 0;
 };
 
-// ─── Core Implementation ─────────────────────────────────────────────
+export type ScopeOpts = {
+  maxResultLength?: number;
+};
 
-const createMeasureImpl = (prefix?: string, counterRef?: { value: number }) => {
+const createMeasureImpl = (prefix?: string, counterRef?: { value: number }, scopeOpts?: ScopeOpts) => {
   const counter = counterRef ?? { get value() { return globalRootCounter; }, set value(v) { globalRootCounter = v; } };
+  const scopeMaxLen = scopeOpts?.maxResultLength;
   let _lastError: unknown = null;
 
   const _measureInternal = async <U>(
@@ -394,7 +397,7 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }) => {
     arg3?: (error: unknown) => any
   ): Promise<T | null> => {
     if (typeof arg2 === 'function') {
-      return _measureInternal(arg2 as any, arg1, [counter.value++], 0, arg3) as Promise<T | null>;
+      return _measureInternal(arg2 as any, arg1, [counter.value++], 0, arg3, scopeMaxLen) as Promise<T | null>;
     } else {
       const currentId = toAlpha(counter.value++);
       emit({
@@ -539,7 +542,7 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }) => {
     arg2?: ((measure: MeasureSyncFn) => T)
   ): T | null => {
     if (typeof arg2 === 'function') {
-      return _measureInternalSync(arg2, arg1, [counter.value++], 0) as T | null;
+      return _measureInternalSync(arg2, arg1, [counter.value++], 0, undefined, scopeMaxLen) as T | null;
     } else {
       const currentId = toAlpha(counter.value++);
       emit({
@@ -595,9 +598,9 @@ export const measureSync = globalInstance.measureSync;
 
 // ─── Scoped instances ────────────────────────────────────────────────
 
-export const createMeasure = (scopePrefix: string) => {
+export const createMeasure = (scopePrefix: string, opts?: ScopeOpts) => {
   const scopeCounter = { value: 0 };
-  const scoped = createMeasureImpl(scopePrefix, scopeCounter);
+  const scoped = createMeasureImpl(scopePrefix, scopeCounter, opts);
   return {
     ...scoped,
     resetCounter: () => { scopeCounter.value = 0; },
