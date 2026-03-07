@@ -298,8 +298,8 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }, scop
     const localMaxLen = extractMaxResultLength(actionInternal);
     const effectiveMaxLen = localMaxLen ?? inheritedMaxLen;
 
-    const currentId = toAlpha(parentIdChain.pop() ?? 0);
-    const fullIdChain = [...parentIdChain, currentId];
+    const currentId = toAlpha(Number(parentIdChain.pop() ?? 0));
+    const fullIdChain: string[] = [...parentIdChain.map(String), currentId];
     const idStr = fullIdChain.join('-');
 
     emit({
@@ -349,7 +349,7 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }, scop
     actionInternal: string | object,
     parentIdChain: (string | number)[],
     depth: number,
-    _onError?: undefined,
+    _onError?: ((error: unknown) => any) | undefined,
     inheritedMaxLen?: number
   ): U | null => {
     const start = performance.now();
@@ -360,8 +360,8 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }, scop
     const localMaxLen = extractMaxResultLength(actionInternal);
     const effectiveMaxLen = localMaxLen ?? inheritedMaxLen;
 
-    const currentId = toAlpha(parentIdChain.pop() ?? 0);
-    const fullIdChain = [...parentIdChain, currentId];
+    const currentId = toAlpha(Number(parentIdChain.pop() ?? 0));
+    const fullIdChain: string[] = [...parentIdChain.map(String), currentId];
     const idStr = fullIdChain.join('-');
 
     if (hasNested) {
@@ -505,7 +505,7 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }, scop
     const results: (R | null)[] = [];
     for (let i = 0; i < items.length; i++) {
       try {
-        results.push(await fn(items[i], i));
+        results.push(await fn(items[i]!, i));
       } catch {
         results.push(null);
       }
