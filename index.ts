@@ -298,8 +298,8 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }, scop
     const localMaxLen = extractMaxResultLength(actionInternal);
     const effectiveMaxLen = localMaxLen ?? inheritedMaxLen;
 
-    const currentId = toAlpha(Number(parentIdChain.pop() ?? 0));
-    const fullIdChain: string[] = [...parentIdChain.map(v => String(v)), currentId];
+    const currentId = toAlpha(Number(parentIdChain.pop() ?? 0) as number);
+    const fullIdChain: string[] = [...parentIdChain.map(v => String(v)) as string[], currentId];
     const idStr = fullIdChain.join('-');
 
     emit({
@@ -360,8 +360,8 @@ const createMeasureImpl = (prefix?: string, counterRef?: { value: number }, scop
     const localMaxLen = extractMaxResultLength(actionInternal);
     const effectiveMaxLen = localMaxLen ?? inheritedMaxLen;
 
-    const currentId = toAlpha(Number(parentIdChain.pop() ?? 0));
-    const fullIdChain: string[] = [...parentIdChain.map(v => String(v)), currentId];
+    const currentId = toAlpha(Number(parentIdChain.pop() ?? 0) as number);
+    const fullIdChain: string[] = [...parentIdChain.map(v => String(v)) as string[], currentId];
     const idStr = fullIdChain.join('-');
 
     if (hasNested) {
